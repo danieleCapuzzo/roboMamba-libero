@@ -1,39 +1,80 @@
-# roboMamba
+# roboMamba-libero
 
-The repo of paper `RoboMamba: Multimodal State Space Model for Efficient Robot Reasoning and Manipulation`
-![robo-mamba-main](img/intro.png)
+A fork of [RoboMamba](https://github.com/lmzpai/roboMamba) (`RoboMamba: Multimodal
+State Space Model for Efficient Robot Reasoning and Manipulation`), stripped down
+to a single purpose: fine-tuning RoboMamba's trunk (CLIP ViT-L/14 + Mamba-2.8B)
+with a chunked action head for LIBERO manipulation tasks.
 
-![robo-mamba-main_00](img/method.png)
+Upstream shipped inference code only, for a single-frame SAPIEN pose-prediction
+head (2-D contact point + 6-D rotation). This fork replaces that head with an
+action-chunking head (predicts 8 steps of 7-DoF LIBERO actions per forward
+pass) and adds the training code upstream withheld: two fine-tuning regimes,
+checkpointing, and the LIBERO data pipeline.
 
-Our main contributions are :
+Evaluation (simulator rollouts, success-rate metrics) is intentionally **not**
+in this repo -- see [vla-benchmark](../vla-benchmark), which loads checkpoints
+produced here.
 
-+ We innovatively integrate a vision encoder with the efficient Mamba language model to construct our end-to-end RoboMamba, which possesses visual common sense and robot-related reasoning abilities.
-+ To equip RoboMamba with action pose prediction abilities, we explore an efficient fine-tuning strategy using a simple policy head. We find that once RoboMamba achieves sufficient reasoning capabilities, it can acquire pose prediction skills with minimal cost.
-+ In our extensive experiments, RoboMamba excels in reasoning on general and robotic evaluation benchmarks, and showcases impressive pose prediction results in both simulation and real-world experiments
+## Layout
 
+```
+src/
+  model/          trunk (vision/llm/vlm) + LinearManip (trunk + action head)
+  data/           LIBERO HDF5 dataset, action chunking, augmentation
+  train/          checkpoint format, LoRA attachment, config helpers
+  assets/         offline tokenizer files
+tests/            no-simulator-required unit + parity tests
+train_head.py     frozen-trunk, head-only fine-tuning
+train_lora.py     LoRA (trunk) + full (head) fine-tuning
+```
 
-![robo-mamba-main](img/reason.png)
+`src/` is not a Python package -- it has no `__init__.py` and its modules
+mix relative and absolute imports (`model.llm`, `data.libero`, ...). Anything
+that imports from this repo must add `src/` to `sys.path` first; every
+entrypoint here does that itself.
 
+## Installation
 
-**Table 2: Comparison of the success rates between RoboMamba and baselines across various training (seen) and test (unseen) categories.**
+`torch`, `causal-conv1d`, and `mamba-ssm` are CUDA-version specific and must
+be installed yourself, before anything else here:
 
-![table2](img/table2.png)
+```
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install causal-conv1d==1.4.0 mamba-ssm==2.2.0   # optional, see below
+```
 
-**installation**
+Then install this repo:
 
-pip install -r requirements.txt
+```
+pip install -e .            # from pyproject.toml
+# or: pip install -r requirements.txt
+```
 
-**How to test**
+Both list the same pins this was validated against (`transformers==4.40.1`,
+`peft==0.11.1`, `timm==0.9.10`). `causal-conv1d`/`mamba-ssm` are optional --
+without them HF's Mamba implementation falls back to a slower pure-torch
+path, which is correct but slower.
 
-test: `bash script/test.sh`
+## Training
 
+```
+python train_head.py --suite spatial
+python train_lora.py --suite spatial
+```
 
-**Checkpoint**
+Both expect `datasets/<suite>_regen/` (LIBERO HDF5 demos) and a released
+trunk checkpoint at `trained/robomamba/RoboMamba-224-llava-R300-checkpoint.pth`
+by default; see `--help` on each script for overrides. Both support
+`--resume`.
 
-The checkpoints are shown in the test branch. Thank you very much for your interest in our work. If you need the training code, please send us an email and specify your research requirements.
+## Checkpoint format
 
+Checkpoints are a dict with `action_head`/`head_state_dict` (the action
+head's own state_dict, unprefixed), `adapter_state`/`lora_config` (LoRA runs
+only), and `meta` (including a mandatory `trunk_checkpoint` path). See
+`src/train/checkpoint.py`.
 
-## 📚 BibTeX 
+## 📚 BibTeX
 
 ```bibtex
 @inproceedings{liurobomamba,
