@@ -188,7 +188,10 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         saved_cfg = LoraTrainConfig(**resume_weights["config"])
 
         # check if resuming is possible
-        assert_resume_config_compatible(saved_cfg, cfg, relaxed_product_fields=("batch_size", "grad_accum"))
+        assert_resume_config_compatible(
+            saved_cfg, cfg, relaxed_product_fields=("batch_size", "grad_accum"),
+            ignored_fields=("eager",),
+        )
         q01, q99 = np.asarray(resume_state["action_q01"]), np.asarray(resume_state["action_q99"])
         start_epoch = resume_state["epoch"]
         global_step = resume_state["global_step"]

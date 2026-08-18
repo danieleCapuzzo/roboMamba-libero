@@ -124,7 +124,7 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
     if resume:
         resume_weights, resume_state = load_resume_files(run_dir)
         saved_cfg = HeadTrainConfig(**resume_weights["config"])
-        assert_resume_config_compatible(saved_cfg, cfg)
+        assert_resume_config_compatible(saved_cfg, cfg, ignored_fields=("eager",))
 
     print(f"\n\n[{cfg.suite}] loading LinearManip trunk from {cfg.trunk_checkpoint}...")
     t0 = time.perf_counter()

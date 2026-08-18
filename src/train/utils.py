@@ -46,15 +46,23 @@ def rng_state_dict() -> Dict[str, Any]:
 
 def assert_resume_config_compatible(
     saved_cfg, cfg, relaxed_product_fields: Optional[Tuple[str, str]] = None,
+    ignored_fields: Tuple[str, ...] = (),
 ) -> None:
     """Asserts `cfg` is safe to resume `saved_cfg` with.
 
-    All fields must match exactly, except: if `relaxed_product_fields` names
-    two fields (e.g. ("batch_size", "grad_accum")), their individual values
-    may differ as long as their product is unchanged -- that product is what
-    actually determines steps_per_epoch and the optimizer-step boundary. A
-    one-line warning is printed when the relaxed fields differ.
+    All fields must match exactly, except:
+      - `ignored_fields` names fields that may differ freely -- pure
+        data-loading/perf knobs that don't affect training determinism or
+        what gets checkpointed (e.g. `eager`, the in-RAM image preload flag).
+      - if `relaxed_product_fields` names two fields (e.g. ("batch_size",
+        "grad_accum")), their individual values may differ as long as their
+        product is unchanged -- that product is what actually determines
+        steps_per_epoch and the optimizer-step boundary. A one-line warning
+        is printed when the relaxed fields differ.
     """
+    ignored = {f for f in ignored_fields if hasattr(saved_cfg, f)}
+    saved_cfg = dataclasses.replace(saved_cfg, **{f: getattr(cfg, f) for f in ignored})
+
     if relaxed_product_fields is None:
         assert saved_cfg == cfg, f"resume config mismatch:\n  saved: {saved_cfg}\n  given: {cfg}"
         return
