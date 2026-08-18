@@ -321,6 +321,30 @@ def compute_action_bounds(data_dir: Path, suite: str) -> Tuple[np.ndarray, np.nd
     return q01, q99
 
 
+def compute_full_action_stats(data_dir: Path, suite: str) -> Dict[str, object]:
+    """
+    Per-dim mean/std/min/max/q01/q99 raw-action stats over every frame in
+    data_dir, plus trajectory/transition counts.
+
+    Returns:
+        Dict with "mean", "std", "min", "max", "q01", "q99" (each an
+        (action_dim,) float32 ndarray), "num_transitions", "num_trajectories".
+    """
+    dataset = LiberoHDF5Dataset(data_dir, suite, augment=False)
+    demo_actions = dataset._demo_actions
+    actions = np.concatenate(demo_actions, axis=0)
+    return {
+        "mean": actions.mean(axis=0).astype(np.float32),
+        "std": actions.std(axis=0).astype(np.float32),
+        "min": actions.min(axis=0).astype(np.float32),
+        "max": actions.max(axis=0).astype(np.float32),
+        "q01": np.quantile(actions, 0.01, axis=0).astype(np.float32),
+        "q99": np.quantile(actions, 0.99, axis=0).astype(np.float32),
+        "num_transitions": int(actions.shape[0]),
+        "num_trajectories": len(demo_actions),
+    }
+
+
 def make_collate_fn(tokenizer):
     """
     Builds a DataLoader collate_fn that formats and tokenizes each sample's
