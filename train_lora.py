@@ -54,7 +54,7 @@ class LoraTrainConfig:
 
     suite: str
     data_dir: Optional[Path] = None
-    trunk_checkpoint: Path = Path("trained/pre_trained/RoboMamba-224-llava-R300-checkpoint.pth")
+    trunk_checkpoint: Path = Path("pretrained/RoboMamba-224-llava-R300-checkpoint.pth")
     output_dir: Path = Path("checkpoints/lora")
 
     # LoRA
@@ -68,9 +68,9 @@ class LoraTrainConfig:
     # optimization
     epochs: int = 30
     max_steps: Optional[int] = None
-    batch_size: int = 8
-    grad_accum: int = 1
-    grad_checkpointing: bool = True
+    batch_size: int = 16
+    grad_accum: int = 2
+    grad_checkpointing: bool = False
     lora_lr: float = 5e-4
     head_lr: float = 5e-4
     weight_decay: float = 0.0
@@ -79,12 +79,20 @@ class LoraTrainConfig:
 
     # checkpointing
     num_save_steps: int = 100
-    save_every_epochs: int = 5
+    save_every_epochs: int = 1
 
     # data / io
     augment: bool = True
     num_workers: int = 4
     seed: int = 7
+
+
+def str_to_bool(value: str) -> bool:
+    if value.lower() in ("true", "1", "yes"):
+        return True
+    if value.lower() in ("false", "0", "no"):
+        return False
+    raise argparse.ArgumentTypeError(f"expected True/False, got {value!r}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=LoraTrainConfig.max_steps)
     parser.add_argument("--batch-size", type=int, default=LoraTrainConfig.batch_size)
     parser.add_argument("--grad-accum", type=int, default=LoraTrainConfig.grad_accum)
-    parser.add_argument("--grad-checkpointing", action="store_true",
+    parser.add_argument("--grad-check", dest="grad_checkpointing", type=str_to_bool,
                          default=LoraTrainConfig.grad_checkpointing)
     parser.add_argument("--lora-lr", type=float, default=LoraTrainConfig.lora_lr)
     parser.add_argument("--head-lr", type=float, default=LoraTrainConfig.head_lr)
@@ -140,7 +148,7 @@ def print_banner(cfg: LoraTrainConfig, data_dir: Path, run_dir: Path) -> None:
         components.append("mamba trunk (LoRA)")
     components.append("action head (full)")
 
-    print("=== LinearManip LoRA Fine-Tuning ===")
+    print("================ ROBOMAMBA LoRA FINE-TUNING ================")
     print("= components: " + ", ".join(components))
     print("= main parameters:")
     for field in dataclasses.fields(cfg):

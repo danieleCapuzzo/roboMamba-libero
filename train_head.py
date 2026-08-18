@@ -52,7 +52,7 @@ class HeadTrainConfig:
 
     suite: str
     data_dir: Optional[Path] = None
-    trunk_checkpoint: Path = Path("trained/pre_trained/RoboMamba-224-llava-R300-checkpoint.pth")
+    trunk_checkpoint: Path = Path("pretrained/RoboMamba-224-llava-R300-checkpoint.pth")
     output_dir: Path = Path("checkpoints/head")
 
     epochs: int = 50

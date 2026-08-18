@@ -2,8 +2,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+pretrained/
 checkpoints/
 datasets/
 runs/
 trained/
 tests/
+
+# HPC cluster
+*.sif
+*.sh
+conf.txt
