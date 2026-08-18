@@ -88,6 +88,7 @@ class LoraTrainConfig:
     augment: bool = True
     num_workers: int = 4
     seed: int = 7
+    eager: bool = False
 
 
 def str_to_bool(value: str) -> bool:
@@ -129,6 +130,8 @@ def parse_args() -> argparse.Namespace:
                          default=LoraTrainConfig.augment)
     parser.add_argument("--num-workers", type=int, default=LoraTrainConfig.num_workers)
     parser.add_argument("--seed", type=int, default=LoraTrainConfig.seed)
+    parser.add_argument("--eager", action="store_true", default=LoraTrainConfig.eager,
+                         help="Preload all suite frames into RAM at startup (needs ~20-40GB/suite).")
     parser.add_argument("--resume", action="store_true",
                          help="Resume from <output-dir>/<suite>/{last,training_state}.pt.")
     return parser.parse_args()
@@ -224,6 +227,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
     # create dataset, compute epochs
     dataset = LiberoHDF5Dataset(
         data_dir, cfg.suite, augment=cfg.augment, action_q01=q01, action_q99=q99, seed=cfg.seed,
+        eager=cfg.eager,
     )
     steps_per_epoch = len(dataset) // cfg.batch_size // cfg.grad_accum
     print(f"[{cfg.suite}] {len(dataset)} frames  {steps_per_epoch} optimizer steps/epoch")

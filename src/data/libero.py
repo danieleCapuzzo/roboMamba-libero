@@ -214,6 +214,10 @@ class LiberoHDF5Dataset(Dataset):
             given, actions are bounds-normalized to [-1, 1]; None returns raw
             actions.
         seed: Base seed for the per-sample augmentation RNG.
+        eager: False (default) reads frames from HDF5 lazily per __getitem__.
+            True preloads every demo's raw agentview_rgb frames into RAM at
+            construction time, removing per-step file I/O. Needs enough RAM
+            to hold the suite's uncompressed frames (tens of GB).
     """
 
     def __init__(
@@ -226,6 +230,7 @@ class LiberoHDF5Dataset(Dataset):
         action_q01: Optional[np.ndarray] = None,
         action_q99: Optional[np.ndarray] = None,
         seed: int = 0,
+        eager: bool = False,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.suite = suite
@@ -236,19 +241,23 @@ class LiberoHDF5Dataset(Dataset):
         self.action_q99 = action_q99
         self.seed = seed
         self.epoch = 0
+        self.eager = eager
 
         self._files = _demo_files(self.data_dir)
         self._instructions_by_suite = _task_instructions(suite)
         self._mean = torch.tensor(CLIP_MEAN).view(3, 1, 1)
         self._std = torch.tensor(CLIP_STD).view(3, 1, 1)
 
-        # (file_idx, demo_key, frame_idx, demo_id) per frame; 
-        # actions loaded eagerly per demo (tiny) 
-        # images stay lazy in HDF5
+        # (file_idx, demo_key, frame_idx, demo_id) per frame;
+        # actions loaded eagerly per demo (tiny)
+        # images stay lazy in HDF5 unless eager=True
         self._index: List[Tuple[int, str, int, int]] = []
         self._demo_actions: List[np.ndarray] = []
+        self._demo_image_offset: List[int] = []  # demo_id -> start row in self._images
+        _image_chunks: List[np.ndarray] = []
         self._instructions: List[str] = []
         demo_id = 0
+        offset = 0
         for file_idx, path in enumerate(self._files):
             with h5py.File(path, "r") as f:
                 instruction = _instruction_for(self._instructions_by_suite, path, f)
@@ -256,9 +265,17 @@ class LiberoHDF5Dataset(Dataset):
                     actions = f["data"][demo_key]["actions"][:].astype(np.float32)
                     self._demo_actions.append(actions)
                     self._instructions.append(instruction)
+                    if self.eager:
+                        images = f["data"][demo_key]["obs"]["agentview_rgb"][:]
+                        _image_chunks.append(images)
+                        self._demo_image_offset.append(offset)
+                        offset += images.shape[0]
                     for frame_idx in range(actions.shape[0]):
                         self._index.append((file_idx, demo_key, frame_idx, demo_id))
                     demo_id += 1
+
+        # concatenated into one array (refcounted)
+        self._images = np.concatenate(_image_chunks, axis=0) if self.eager else None
 
         self._handles: Dict[int, h5py.File] = {}
 
@@ -281,8 +298,12 @@ class LiberoHDF5Dataset(Dataset):
 
     def __getitem__(self, index: int) -> Dict[str, object]:
         file_idx, demo_key, frame_idx, demo_id = self._index[index]
-        f = self._file(file_idx)
-        image = f["data"][demo_key]["obs"]["agentview_rgb"][frame_idx]
+        if self.eager:
+            # O(1) due to array random access property
+            image = self._images[self._demo_image_offset[demo_id] + frame_idx]
+        else:
+            f = self._file(file_idx)
+            image = f["data"][demo_key]["obs"]["agentview_rgb"][frame_idx]
 
         frame = to_upright(image)
         frame = resize_frame(frame, self.image_size)
@@ -380,10 +401,12 @@ def create_libero_dataset(
     action_q01: Optional[np.ndarray] = None,
     action_q99: Optional[np.ndarray] = None,
     seed: int = 0,
+    eager: bool = False,
 ) -> LiberoHDF5Dataset:
     """
     Factory for LiberoHDF5Dataset."""
     return LiberoHDF5Dataset(
         data_dir, suite, augment=augment,
         action_q01=action_q01, action_q99=action_q99, seed=seed,
+        eager=eager,
     )

@@ -65,6 +65,7 @@ class HeadTrainConfig:
     num_workers: int = 8
     seed: int = 7
     save_every_epochs: int = 5
+    eager: bool = False
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +82,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=HeadTrainConfig.num_workers)
     parser.add_argument("--seed", type=int, default=HeadTrainConfig.seed)
     parser.add_argument("--save-every-epochs", type=int, default=HeadTrainConfig.save_every_epochs)
+    parser.add_argument("--eager", action="store_true", default=HeadTrainConfig.eager,
+                         help="Preload all suite frames into RAM at startup (needs ~20-40GB/suite).")
     parser.add_argument("--resume", action="store_true",
                          help="Resume from <output-dir>/<suite>/{last,training_state}.pt.")
     return parser.parse_args()
@@ -91,7 +94,7 @@ def cfg_from_args(args: argparse.Namespace) -> HeadTrainConfig:
         suite=args.suite, data_dir=args.data_dir, trunk_checkpoint=args.trunk_checkpoint,
         output_dir=args.output_dir, epochs=args.epochs, batch_size=args.batch_size,
         lr=args.lr, weight_decay=args.weight_decay, num_workers=args.num_workers,
-        seed=args.seed, save_every_epochs=args.save_every_epochs,
+        seed=args.seed, save_every_epochs=args.save_every_epochs, eager=args.eager,
     )
 
 
@@ -145,9 +148,9 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
 
     # create dataset and dataloader
     dataset = LiberoHDF5Dataset(
-        data_dir, cfg.suite, augment=True, 
-        action_q01=action_q01, action_q99=action_q99, 
-        seed=cfg.seed,
+        data_dir, cfg.suite, augment=True,
+        action_q01=action_q01, action_q99=action_q99,
+        seed=cfg.seed, eager=cfg.eager,
     )
     loader = DataLoader(
         dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True,
