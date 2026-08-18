@@ -30,7 +30,7 @@ import csv
 import dataclasses
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import torch
@@ -43,6 +43,9 @@ from data.libero import SUITE_TO_DATASET_DIR, LiberoHDF5Dataset, compute_action_
 from model.loader import build_libero_model
 from train.checkpoint import atomic_save, build_weights_payload, load_head_into
 from train.lora_utils import attach_lora, check_gradient_liveness, force_mamba_module_path, set_lora_trainable
+from train.utils import (
+    assert_resume_config_compatible, load_resume_files, print_banner, restore_rng_state, rng_state_dict,
+)
 
 
 @dataclass(frozen=True)
@@ -137,8 +140,7 @@ def cfg_from_args(args: argparse.Namespace) -> LoraTrainConfig:
     return LoraTrainConfig(**kwargs)
 
 
-def print_banner(cfg: LoraTrainConfig, data_dir: Path, run_dir: Path) -> None:
-    """Startup banner."""
+def lora_components(cfg: LoraTrainConfig) -> list:
     components = []
     if cfg.lora_vit:
         components.append("vision encoder (LoRA)")
@@ -147,14 +149,7 @@ def print_banner(cfg: LoraTrainConfig, data_dir: Path, run_dir: Path) -> None:
     if cfg.lora_mamba:
         components.append("mamba trunk (LoRA)")
     components.append("action head (full)")
-
-    print("================ ROBOMAMBA LoRA FINE-TUNING ================")
-    print("= components: " + ", ".join(components))
-    print("= main parameters:")
-    for field in dataclasses.fields(cfg):
-        print(f"=   {field.name}={getattr(cfg, field.name)}")
-    print(f"=   data_dir={data_dir}")
-    print(f"=   run_dir={run_dir}")
+    return components
 
 
 def build_lora_config_dict(cfg: LoraTrainConfig) -> dict:
@@ -181,24 +176,21 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
     training_state_path = run_dir / "training_state.pt"
 
     # print startup banner
-    print_banner(cfg, data_dir, run_dir)
+    print_banner("ROBOMAMBA LoRA FINE-TUNING", lora_components(cfg), cfg, data_dir, run_dir)
 
     # RESUME handling
     resume_weights, resume_state = None, None
     if resume:
-        if not last_ckpt_path.exists() or not training_state_path.exists():
-            raise RuntimeError(f"--resume given but missing {last_ckpt_path} and/or {training_state_path}")
-        resume_weights = torch.load(last_ckpt_path, map_location="cpu", weights_only=False)
-        resume_state = torch.load(training_state_path, map_location="cpu", weights_only=False)
+        resume_weights, resume_state = load_resume_files(run_dir)
         saved_cfg = LoraTrainConfig(**resume_weights["config"])
-        assert saved_cfg == cfg, f"resume config mismatch:\n  saved: {saved_cfg}\n  given: {cfg}"
+
+        # check if resuming is possible
+        assert_resume_config_compatible(saved_cfg, cfg, relaxed_product_fields=("batch_size", "grad_accum"))
         q01, q99 = np.asarray(resume_state["action_q01"]), np.asarray(resume_state["action_q99"])
         start_epoch = resume_state["epoch"]
         global_step = resume_state["global_step"]
         skip_steps_in_epoch = resume_state.get("step_in_epoch", 0)
-        torch.set_rng_state(resume_state["torch_rng_state"])
-        if torch.cuda.is_available() and resume_state.get("cuda_rng_state") is not None:
-            torch.cuda.set_rng_state_all(resume_state["cuda_rng_state"])
+        restore_rng_state(resume_state)
     else:
         q01, q99 = compute_action_bounds(data_dir, cfg.suite)
         start_epoch, global_step, skip_steps_in_epoch = 0, 0, 0
@@ -279,8 +271,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
             "step_in_epoch": step_in_epoch,
             "action_q01": q01,
             "action_q99": q99,
-            "torch_rng_state": torch.get_rng_state(),
-            "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            **rng_state_dict(),
             "config": dataclasses.asdict(cfg),
         }
         atomic_save(last_ckpt_path, weights_payload)

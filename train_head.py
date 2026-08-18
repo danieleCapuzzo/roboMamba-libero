@@ -41,6 +41,9 @@ from data.libero import SUITE_TO_DATASET_DIR, LiberoHDF5Dataset, compute_action_
 from model.action_head import ACTION_CHUNK, ACTION_DIM, HIDDEN_DIM, IMAGE_SIZE, PROMPT_TEMPLATE
 from model.loader import build_libero_model
 from train.checkpoint import atomic_save, build_weights_payload, load_head_into
+from train.utils import (
+    assert_resume_config_compatible, load_resume_files, print_banner, restore_rng_state, rng_state_dict,
+)
 
 
 @dataclass(frozen=True)
@@ -92,17 +95,6 @@ def cfg_from_args(args: argparse.Namespace) -> HeadTrainConfig:
     )
 
 
-def print_banner(cfg: HeadTrainConfig, data_dir: Path, run_dir: Path) -> None:
-    """Startup banner."""
-    print("================ ROBOMAMBA HEAD TRAINING ================")
-    print("= components:\n=  vision (frozen)\n=  projector (frozen)\n=  mamba trunk (frozen)\n=  action head (full)")
-    print("= main parameters:")
-    for field in dataclasses.fields(cfg):
-        print(f"=   {field.name}={getattr(cfg, field.name)}")
-    print(f"=   data_dir={data_dir}")
-    print(f"=   run_dir={run_dir}")
-
-
 def train(cfg: HeadTrainConfig, resume: bool) -> None:
 
     # set the seed and device
@@ -121,17 +113,15 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
     log_path = run_dir / "train_log.csv"
 
     # show startup banner
-    print_banner(cfg, data_dir, run_dir)
+    components = ["vision (frozen)", "projector (frozen)", "mamba trunk (frozen)", "action head (full)"]
+    print_banner("ROBOMAMBA HEAD TRAINING", components, cfg, data_dir, run_dir)
 
-    # RESUME (--resume) from checkpoint 
+    # RESUME (--resume) from checkpoint
     resume_weights, resume_state = None, None
     if resume:
-        if not last_ckpt_path.exists() or not training_state_path.exists():
-            raise RuntimeError(f"--resume given but missing {last_ckpt_path} and/or {training_state_path}")
-        resume_weights = torch.load(last_ckpt_path, map_location="cpu", weights_only=False)
-        resume_state = torch.load(training_state_path, map_location="cpu", weights_only=False)
+        resume_weights, resume_state = load_resume_files(run_dir)
         saved_cfg = HeadTrainConfig(**resume_weights["config"])
-        assert saved_cfg == cfg, f"resume config mismatch:\n  saved: {saved_cfg}\n  given: {cfg}"
+        assert_resume_config_compatible(saved_cfg, cfg)
 
     print(f"\n\n[{cfg.suite}] loading LinearManip trunk from {cfg.trunk_checkpoint}...")
     t0 = time.perf_counter()
@@ -176,9 +166,7 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
         load_head_into(model, resume_weights)
         optimizer.load_state_dict(resume_state["optimizer_state"])
         start_epoch = resume_state["epoch"]
-        torch.set_rng_state(resume_state["torch_rng_state"])
-        if torch.cuda.is_available() and resume_state.get("cuda_rng_state") is not None:
-            torch.cuda.set_rng_state_all(resume_state["cuda_rng_state"])
+        restore_rng_state(resume_state)
         print(f"[{cfg.suite}] resumed from {run_dir} at epoch {start_epoch}")
     else:
         with open(log_path, "w", newline="") as f:
@@ -244,8 +232,7 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
             "action_q01": action_q01,
             "action_q99": action_q99,
             "optimizer_state": optimizer.state_dict(),
-            "torch_rng_state": torch.get_rng_state(),
-            "cuda_rng_state": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            **rng_state_dict(),
         })
         print(f"[{cfg.suite}] epoch {epoch + 1}/{cfg.epochs} done in {epoch_time_s:.1f}s  train_loss={train_loss:.4f}")
 
