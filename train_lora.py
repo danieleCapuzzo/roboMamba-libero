@@ -9,7 +9,7 @@ Run in the `bench-env` conda env, from the repo root:
     python train_lora.py --suite spatial
     python train_lora.py --suite spatial --resume
 
-Checkpointing under <output-dir>/<suite>/:
+Checkpointing under <output-dir>/<suite>_r<lora-rank>_a<lora-alpha>/:
   - last.pt: LoRA adapters (unmerged) + fully-trained head. Overwritten every
     --num-save-steps optimizer steps.
   - training_state.pt: optimizer, LR scheduler, epoch/step counters, RNG
@@ -61,8 +61,8 @@ class LoraTrainConfig:
     output_dir: Path = Path("checkpoints/lora")
 
     # LoRA
-    lora_rank: int = 16
-    lora_alpha: int = 16
+    lora_rank: int = 32
+    lora_alpha: int = 32
     lora_dropout: float = 0.0
     lora_vit: bool = False
     lora_projector: bool = True
@@ -73,7 +73,7 @@ class LoraTrainConfig:
     max_steps: Optional[int] = None
     batch_size: int = 16
     grad_accum: int = 2
-    grad_checkpointing: bool = True
+    grad_checkpointing: bool = False
     lora_lr: float = 5e-4
     head_lr: float = 5e-4
     weight_decay: float = 0.0
@@ -81,14 +81,14 @@ class LoraTrainConfig:
     warmup_steps: int = 100
 
     # checkpointing
-    num_save_steps: int = 100
+    num_save_steps: int = 250
     save_every_epochs: int = 1
 
     # data / io
     augment: bool = True
-    num_workers: int = 4
+    num_workers: int = 8
     seed: int = 7
-    eager: bool = False
+    eager: bool = True
 
     # performance (no eff. on training, except bf16_adapters)
     fp32_scan: bool = True
@@ -142,7 +142,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bf16-adapters", action="store_true", default=LoraTrainConfig.bf16_adapters,
                          help="Keep LoRA adapters in bf16 instead of fp32 master weights (faster, lower precision).")
     parser.add_argument("--resume", action="store_true",
-                         help="Resume from <output-dir>/<suite>/{last,training_state}.pt.")
+                         help="Resume from <output-dir>/<suite>_r<lora-rank>_a<lora-alpha>/"
+                              "{last,training_state}.pt.")
     return parser.parse_args()
 
 
@@ -181,7 +182,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
     data_dir = cfg.data_dir or (Path("datasets") / f"{dataset_dir_name}_regen")
     if not data_dir.exists():
         raise RuntimeError(f"Dataset directory not found: {data_dir}")
-    run_dir = cfg.output_dir / cfg.suite
+    run_dir = cfg.output_dir / f"{cfg.suite}_r{cfg.lora_rank}_a{cfg.lora_alpha}"
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "train_log.csv"
     last_ckpt_path = run_dir / "last.pt"
@@ -208,6 +209,13 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         skip_steps_in_epoch = resume_state.get("step_in_epoch", 0)
         restore_rng_state(resume_state)
     else:
+        existing = [p for p in (log_path, last_ckpt_path, training_state_path) if p.exists()]
+        if existing:
+            raise RuntimeError(
+                f"Starting a fresh run (no --resume) would overwrite existing files in {run_dir}: "
+                f"{[str(p) for p in existing]}. Pass --resume to continue this run, or clear/move "
+                f"{run_dir} first."
+            )
         q01, q99 = compute_action_bounds(data_dir, cfg.suite)
         start_epoch, global_step, skip_steps_in_epoch = 0, 0, 0
         with open(log_path, "w", newline="") as f:
@@ -259,7 +267,11 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         [{"params": lora_params, "lr": cfg.lora_lr}, {"params": head.parameters(), "lr": cfg.head_lr}],
         weight_decay=cfg.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps_per_epoch * cfg.epochs)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=steps_per_epoch * cfg.epochs,
+        eta_min=[0.05 * cfg.lora_lr, 0.05 * cfg.head_lr],
+    )
 
     if resume_weights is not None:
         set_peft_model_state_dict(model, resume_weights["adapter_state"])

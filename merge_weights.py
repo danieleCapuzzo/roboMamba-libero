@@ -57,13 +57,23 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Merge a trunk + head/LoRA checkpoint into a single self-contained .pt."
     )
-    parser.add_argument("--trunk", type=Path, required=True,
-                         help="Released trunk .pth (vision/projector/llm keys).")
-    parser.add_argument("--weights", type=Path, required=True,
+
+    # default paths
+    def_trunk = Path("pretrained/RoboMamba-224-llava-R300-checkpoint.pth")
+    def_weights = Path("checkpoints/lora/spatial_r16_a16/lora_epoch30.pt")
+    def_output = Path("checkpoints/merged/spatial_r16_a16.pt")
+
+
+    parser.add_argument("--trunk", type=Path, default=def_trunk,
+                         help=f"Released trunk .pth (vision/projector/llm keys). "
+                              f"(default: {def_trunk})")
+    parser.add_argument("--weights", type=Path, default=def_weights,
                          help="Head-only or LoRA+head checkpoint from train_head.py/train_lora.py "
-                              "(e.g. checkpoints/lora/<suite>/lora_epoch{N}.pt).")
-    parser.add_argument("--output", type=Path, required=True,
-                         help="Destination path for the merged checkpoint (.pt).")
+                              f"(e.g. checkpoints/lora/<suite>_r<rank>_a<alpha>/lora_epoch{{N}}.pt). "
+                              f"(default: {def_weights})")
+    parser.add_argument("--output", type=Path, default=def_output,
+                         help=f"Destination path for the merged checkpoint (.pt). "
+                              f"(default: {def_output})")
     parser.add_argument("--format", choices=list(FORMAT_DTYPES), default="bf16",
                          help="Output weight dtype (default: bf16).")
     parser.add_argument("--data-dir", type=Path, default=None,
