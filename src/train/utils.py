@@ -44,6 +44,16 @@ def rng_state_dict() -> Dict[str, Any]:
     }
 
 
+def _mismatch_message(saved_cfg, cfg) -> str:
+    """Formats only the fields that differ between `saved_cfg` and `cfg`."""
+    diffs = [
+        f"    {field.name}: saved={getattr(saved_cfg, field.name)!r} given={getattr(cfg, field.name)!r}"
+        for field in dataclasses.fields(saved_cfg)
+        if getattr(saved_cfg, field.name) != getattr(cfg, field.name)
+    ]
+    return "mismatching parameters:\n" + "\n".join(diffs)
+
+
 def assert_resume_config_compatible(
     saved_cfg, cfg, relaxed_product_fields: Optional[Tuple[str, str]] = None,
     ignored_fields: Tuple[str, ...] = (),
@@ -64,7 +74,7 @@ def assert_resume_config_compatible(
     saved_cfg = dataclasses.replace(saved_cfg, **{f: getattr(cfg, f) for f in ignored})
 
     if relaxed_product_fields is None:
-        assert saved_cfg == cfg, f"resume config mismatch:\n  saved: {saved_cfg}\n  given: {cfg}"
+        assert saved_cfg == cfg, _mismatch_message(saved_cfg, cfg)
         return
 
     field_a, field_b = relaxed_product_fields
@@ -72,7 +82,7 @@ def assert_resume_config_compatible(
     cfg_product = getattr(cfg, field_a) * getattr(cfg, field_b)
     saved_rest = dataclasses.replace(saved_cfg, **{field_a: 0, field_b: 0})
     cfg_rest = dataclasses.replace(cfg, **{field_a: 0, field_b: 0})
-    assert saved_rest == cfg_rest, f"resume config mismatch:\n  saved: {saved_cfg}\n  given: {cfg}"
+    assert saved_rest == cfg_rest, _mismatch_message(saved_rest, cfg_rest)
     assert saved_product == cfg_product, (
         f"resume {field_a}*{field_b} mismatch: saved {field_a}={getattr(saved_cfg, field_a)} "
         f"{field_b}={getattr(saved_cfg, field_b)} (={saved_product}) vs given "

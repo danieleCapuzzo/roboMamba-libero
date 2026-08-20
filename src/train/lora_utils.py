@@ -10,6 +10,7 @@ Two hazards this module exists to prevent:
 
 from typing import List
 
+import torch
 import torch.nn as nn
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers.models.mamba.modeling_mamba import MambaMixer
@@ -60,6 +61,7 @@ def force_mamba_module_path(model: nn.Module) -> int:
 def attach_lora(
     model: nn.Module, lora_rank: int, lora_alpha: int, lora_dropout: float,
     lora_vit: bool, lora_projector: bool, lora_mamba: bool,
+    bf16_adapters: bool = False,
 ) -> PeftModel:
     """
     Wraps `model` in LoRA adapters and re-enables gradients on the folded-in
@@ -67,6 +69,8 @@ def attach_lora(
 
     Args:
         model: LinearManip to wrap.
+        bf16_adapters: Keep adapter weights in bf16 instead of fp32 
+        trading some approximation for performance (~2338ms -> ~2110ms /step)
 
     Returns:
         A PeftModel; `.action_head` is reachable at
@@ -79,9 +83,10 @@ def attach_lora(
         target_modules=targets, init_lora_weights="gaussian",
     )
     peft_model = get_peft_model(model, lora_config)
+    adapter_dtype = torch.bfloat16 if bf16_adapters else torch.float32
     for name, param in peft_model.named_parameters():
         if "lora_" in name:
-            param.data = param.data.float()  # adapter master weights stay fp32
+            param.data = param.data.to(adapter_dtype)
 
     # get_peft_model froze everything not named lora_, including the pre-existing head
     head = peft_model.base_model.model.action_head

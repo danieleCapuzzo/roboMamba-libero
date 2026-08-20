@@ -40,7 +40,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from data.libero import SUITE_TO_DATASET_DIR, LiberoHDF5Dataset, compute_action_bounds, make_collate_fn
-from model.loader import build_libero_model
+from model.loader import build_libero_model, enable_fp32_selective_scan
 from train.checkpoint import atomic_save, build_weights_payload, load_head_into
 from train.lora_utils import attach_lora, check_gradient_liveness, force_mamba_module_path, set_lora_trainable
 from train.utils import (
@@ -73,12 +73,12 @@ class LoraTrainConfig:
     max_steps: Optional[int] = None
     batch_size: int = 16
     grad_accum: int = 2
-    grad_checkpointing: bool = False
+    grad_checkpointing: bool = True
     lora_lr: float = 5e-4
     head_lr: float = 5e-4
     weight_decay: float = 0.0
     grad_clip: float = 1.0
-    warmup_steps: int = 0
+    warmup_steps: int = 100
 
     # checkpointing
     num_save_steps: int = 100
@@ -89,6 +89,10 @@ class LoraTrainConfig:
     num_workers: int = 4
     seed: int = 7
     eager: bool = False
+
+    # performance (no eff. on training, except bf16_adapters)
+    fp32_scan: bool = True
+    bf16_adapters: bool = False
 
 
 def str_to_bool(value: str) -> bool:
@@ -132,6 +136,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=LoraTrainConfig.seed)
     parser.add_argument("--eager", action="store_true", default=LoraTrainConfig.eager,
                          help="Preload all suite frames into RAM at startup (needs ~20-40GB/suite).")
+    parser.add_argument("--no-fp32-scan", dest="fp32_scan", action="store_false",
+                         default=LoraTrainConfig.fp32_scan,
+                         help="Run Mamba's selective scan in bf16 (slower and less accurate on most GPUs).")
+    parser.add_argument("--bf16-adapters", action="store_true", default=LoraTrainConfig.bf16_adapters,
+                         help="Keep LoRA adapters in bf16 instead of fp32 master weights (faster, lower precision).")
     parser.add_argument("--resume", action="store_true",
                          help="Resume from <output-dir>/<suite>/{last,training_state}.pt.")
     return parser.parse_args()
@@ -190,7 +199,8 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         # check if resuming is possible
         assert_resume_config_compatible(
             saved_cfg, cfg, relaxed_product_fields=("batch_size", "grad_accum"),
-            ignored_fields=("eager",),
+            ignored_fields=("grad_checkpointing", "num_save_steps", "save_every_epochs",
+                            "num_workers", "eager", "fp32_scan"),
         )
         q01, q99 = np.asarray(resume_state["action_q01"]), np.asarray(resume_state["action_q99"])
         start_epoch = resume_state["epoch"]
@@ -205,6 +215,9 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
 
     print(f"[{cfg.suite}] action bounds q01={q01.round(4)} q99={q99.round(4)}")
 
+    if cfg.fp32_scan and enable_fp32_selective_scan():
+        print(f"[{cfg.suite}] Mamba selective scan routed through fp32 (faster and more accurate)")
+
     print(f"[{cfg.suite}] loading LinearManip trunk from {cfg.trunk_checkpoint}...")
     t0 = time.perf_counter()
     base_model = build_libero_model(cfg.trunk_checkpoint, device=device, dtype=torch.bfloat16)
@@ -216,8 +229,9 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
 
     # put the model in LoRA mode
     model = attach_lora(
-        base_model, cfg.lora_rank, cfg.lora_alpha, 
-        cfg.lora_dropout, cfg.lora_vit, cfg.lora_projector, cfg.lora_mamba
+        base_model, cfg.lora_rank, cfg.lora_alpha,
+        cfg.lora_dropout, cfg.lora_vit, cfg.lora_projector, cfg.lora_mamba,
+        bf16_adapters=cfg.bf16_adapters,
     )
     model.print_trainable_parameters()
     model.train()

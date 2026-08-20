@@ -39,7 +39,7 @@ from tqdm import tqdm
 
 from data.libero import SUITE_TO_DATASET_DIR, LiberoHDF5Dataset, compute_action_bounds, make_collate_fn
 from model.action_head import ACTION_CHUNK, ACTION_DIM, HIDDEN_DIM, IMAGE_SIZE, PROMPT_TEMPLATE
-from model.loader import build_libero_model
+from model.loader import build_libero_model, enable_fp32_selective_scan
 from train.checkpoint import atomic_save, build_weights_payload, load_head_into
 from train.utils import (
     assert_resume_config_compatible, load_resume_files, print_banner, restore_rng_state, rng_state_dict,
@@ -125,6 +125,8 @@ def train(cfg: HeadTrainConfig, resume: bool) -> None:
         resume_weights, resume_state = load_resume_files(run_dir)
         saved_cfg = HeadTrainConfig(**resume_weights["config"])
         assert_resume_config_compatible(saved_cfg, cfg, ignored_fields=("eager",))
+
+    enable_fp32_selective_scan()
 
     print(f"\n\n[{cfg.suite}] loading LinearManip trunk from {cfg.trunk_checkpoint}...")
     t0 = time.perf_counter()
