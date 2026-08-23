@@ -45,6 +45,7 @@ from train.checkpoint import atomic_save, build_weights_payload, load_head_into
 from train.lora_utils import attach_lora, check_gradient_liveness, force_mamba_module_path, set_lora_trainable
 from train.utils import (
     assert_resume_config_compatible, load_resume_files, print_banner, restore_rng_state, rng_state_dict,
+    truncate_log_after_step,
 )
 
 
@@ -62,7 +63,7 @@ class LoraTrainConfig:
 
     # LoRA
     lora_rank: int = 32
-    lora_alpha: int = 32
+    lora_alpha: int = 16
     lora_dropout: float = 0.0
     lora_vit: bool = False
     lora_projector: bool = True
@@ -208,6 +209,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         global_step = resume_state["global_step"]
         skip_steps_in_epoch = resume_state.get("step_in_epoch", 0)
         restore_rng_state(resume_state)
+        truncate_log_after_step(log_path, global_step)
     else:
         existing = [p for p in (log_path, last_ckpt_path, training_state_path) if p.exists()]
         if existing:
@@ -219,7 +221,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
         q01, q99 = compute_action_bounds(data_dir, cfg.suite)
         start_epoch, global_step, skip_steps_in_epoch = 0, 0, 0
         with open(log_path, "w", newline="") as f:
-            csv.writer(f).writerow(["step", "epoch", "loss", "lr_lora", "lr_head"])
+            csv.writer(f).writerow(["step", "epoch", "loss", "lr_lora", "lr_head", "grad_norm"])
 
     print(f"[{cfg.suite}] action bounds q01={q01.round(4)} q99={q99.round(4)}")
 
@@ -269,8 +271,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer,
-        T_max=steps_per_epoch * cfg.epochs,
-        eta_min=[0.05 * cfg.lora_lr, 0.05 * cfg.head_lr],
+        T_max=steps_per_epoch * cfg.epochs
     )
 
     if resume_weights is not None:
@@ -361,7 +362,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
             if (micro_step + 1) % cfg.grad_accum != 0:
                 continue
 
-            torch.nn.utils.clip_grad_norm_(clip_params, cfg.grad_clip)
+            grad_norm = torch.nn.utils.clip_grad_norm_(clip_params, cfg.grad_clip)
             optimizer.step()
             scheduler.step()
             global_step += 1
@@ -378,6 +379,7 @@ def train(cfg: LoraTrainConfig, resume: bool) -> None:
                 csv.writer(f).writerow([
                     global_step, epoch + 1, last_step_loss,
                     optimizer.param_groups[0]["lr"], optimizer.param_groups[1]["lr"],
+                    grad_norm.item(),
                 ])
 
             if global_step % cfg.num_save_steps == 0:

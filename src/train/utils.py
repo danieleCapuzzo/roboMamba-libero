@@ -1,5 +1,6 @@
 """Shared runtime helpers for the head-only and LoRA trainers."""
 
+import csv
 import dataclasses
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -27,6 +28,28 @@ def load_resume_files(run_dir: Path) -> Tuple[dict, dict]:
     resume_weights = torch.load(last_ckpt_path, map_location="cpu", weights_only=False)
     resume_state = torch.load(training_state_path, map_location="cpu", weights_only=False)
     return resume_weights, resume_state
+
+
+def truncate_log_after_step(log_path: Path, resume_step: int) -> None:
+    """
+    Drops every train_log.csv row with step > resume_step.
+    """
+    if not log_path.exists():
+        return
+    with open(log_path, newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        return
+    header, body = rows[0], rows[1:]
+    kept = [row for row in body if int(row[0]) <= resume_step]
+    if len(kept) == len(body):
+        return
+    with open(log_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(kept)
+    print(f"[resume] truncated {log_path} to steps <= {resume_step} "
+          f"(dropped {len(body) - len(kept)} stale rows)")
 
 
 def restore_rng_state(resume_state: Dict[str, Any]) -> None:
